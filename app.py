@@ -22,16 +22,27 @@ st.set_page_config(
 # ============================================================
 @st.cache_data
 def load_data():
+    # Try scored data first (preferred)
     if os.path.exists('data/nigeria_loan_scored.csv'):
         df = pd.read_csv('data/nigeria_loan_scored.csv')
+        # Ensure RiskGrade is categorical
+        df['RiskGrade'] = pd.Categorical(df['RiskGrade'], categories=['A (Prime)', 'B (Near-Prime)', 'C (Subprime)', 'D (High Risk)', 'E (Deep Subprime)'])
+        df['LoanTier'] = pd.Categorical(df['LoanTier'], categories=['Small (<20k)', 'Medium (20-100k)', 'Large (>100k)'])
         return df
-    elif os.path.exists('data/nigeria_loan_applicants.csv'):
+
+    # Try raw data next
+    if os.path.exists('data/nigeria_loan_applicants.csv'):
         df = pd.read_csv('data/nigeria_loan_applicants.csv')
     else:
+        # Fallback: generate clean synthetic data
         np.random.seed(2024)
         n = 8000
         states = ['Lagos', 'Kano', 'Rivers', 'Kaduna', 'Oyo', 'FCT Abuja', 'Delta', 'Ogun', 'Anambra', 'Enugu']
         state_weights = [0.22, 0.10, 0.08, 0.07, 0.07, 0.08, 0.06, 0.07, 0.13, 0.12]
+
+        prev_loans = np.random.poisson(1.5, n).clip(0, 10)
+        prev_defaults = np.array([np.random.binomial(int(pl), 0.15) for pl in prev_loans])
+
         df = pd.DataFrame({
             'ApplicantID': [f'APP_{str(i).zfill(6)}' for i in range(1, n+1)],
             'Defaulted': np.random.binomial(1, 0.22, n),
@@ -43,9 +54,9 @@ def load_data():
             'LoanAmount': np.random.choice([5000, 10000, 20000, 50000, 100000, 200000, 500000], n, p=[0.05, 0.10, 0.20, 0.25, 0.20, 0.15, 0.05]),
             'LoanTenureDays': np.random.choice([7, 14, 30, 60, 90], n, p=[0.05, 0.10, 0.50, 0.25, 0.10]),
             'InterestRate': np.random.uniform(10, 40, n).round(1),
-            'PreviousLoans': np.random.poisson(1.5, n).clip(0, 10),
-            'PreviousDefaults': np.random.binomial(np.random.poisson(1.5, n).clip(0, 10), 0.15),
-            'DaysSinceLastLoan': np.random.exponential(60, n).clip(0, 730).astype(int),
+            'PreviousLoans': prev_loans,
+            'PreviousDefaults': prev_defaults,
+            'DaysSinceLastLoan': np.where(prev_loans == 0, 999, np.random.exponential(60, n).clip(0, 730).astype(int)),
             'AirtimeMonthly': np.random.exponential(2000, n).clip(100, 50000).round(0),
             'DataBundleMonthly': np.random.exponential(1500, n).clip(0, 20000).round(0),
             'MobileWalletBalance': np.random.exponential(5000, n).clip(0, 500000).round(0),
@@ -59,24 +70,28 @@ def load_data():
             'ApplicationHour': np.random.choice(range(24), n),
             'ReferralSource': np.random.choice(['Organic', 'Referral', 'Facebook Ads', 'Google Ads', 'Agent'], n, p=[0.30, 0.20, 0.20, 0.15, 0.15]),
         })
-        for col in ['AvgMonthlyInflow', 'AvgMonthlyOutflow', 'MobileWalletBalance']:
-            df.loc[np.random.choice(df.index, size=int(0.03*len(df)), replace=False), col] = np.nan
-        df['AvgMonthlyInflow'].fillna(df['AvgMonthlyInflow'].median(), inplace=True)
-        df['AvgMonthlyOutflow'].fillna(df['AvgMonthlyOutflow'].median(), inplace=True)
-        df['MobileWalletBalance'].fillna(df['MobileWalletBalance'].median(), inplace=True)
 
-    df['DebtToIncome'] = (df['LoanAmount'] / np.maximum(df['AvgMonthlyInflow'], 1)).round(2)
-    df['DebtToIncome'] = df['DebtToIncome'].clip(0, 20)
+        # Introduce and fill missing values
+        for col in ['AvgMonthlyInflow', 'AvgMonthlyOutflow', 'MobileWalletBalance']:
+            missing_idx = np.random.choice(df.index, size=int(0.03*len(df)), replace=False)
+            df.loc[missing_idx, col] = np.nan
+        df = df.fillna({'AvgMonthlyInflow': df['AvgMonthlyInflow'].median(),
+                        'AvgMonthlyOutflow': df['AvgMonthlyOutflow'].median(),
+                        'MobileWalletBalance': df['MobileWalletBalance'].median()})
+
+    # Feature engineering
+    df['DebtToIncome'] = (df['LoanAmount'] / df['AvgMonthlyInflow'].clip(lower=1)).round(2).clip(0, 20)
     df['NetCashFlow'] = (df['AvgMonthlyInflow'] - df['AvgMonthlyOutflow']).round(0)
-    df['PreviousDefaultRate'] = (df['PreviousDefaults'] / np.maximum(df['PreviousLoans'], 1)).round(2)
+    df['PreviousDefaultRate'] = (df['PreviousDefaults'] / df['PreviousLoans'].clip(lower=1)).round(2)
     df['DigitalEngagementScore'] = ((df['AirtimeMonthly'] / 5000) * 0.3 + (df['DataBundleMonthly'] / 3000) * 0.2 + (df['AppUsageHours'] / 5) * 0.3 + (df['MobileWalletBalance'] / 50000) * 0.2).round(2)
     df['FinancialDepthScore'] = (df['BVNVerified'] * 0.3 + (df['LinkedBankAccounts'] / 5) * 0.3 + (df['SalaryCreditFrequency'] / 4) * 0.4).round(2)
     df['LoanTier'] = pd.cut(df['LoanAmount'], bins=[0, 20000, 100000, 500000], labels=['Small (<20k)', 'Medium (20-100k)', 'Large (>100k)'])
 
+    # Encode categoricals
     cat_cols = ['Gender', 'State', 'EmploymentType', 'EducationLevel', 'DevicePriceTier', 'ReferralSource']
     df_enc = df.copy()
     for col in cat_cols:
-        df_enc[col + '_enc'] = LabelEncoder().fit_transform(df_enc[col])
+        df_enc[col + '_enc'] = LabelEncoder().fit_transform(df_enc[col].astype(str))
 
     feature_cols = ['Age', 'LoanAmount', 'LoanTenureDays', 'InterestRate', 'PreviousLoans',
                     'PreviousDefaults', 'DaysSinceLastLoan', 'AirtimeMonthly', 'DataBundleMonthly',
@@ -87,8 +102,13 @@ def load_data():
     for col in cat_cols:
         feature_cols.append(col + '_enc')
 
-    X = df_enc[feature_cols]
-    y = df_enc['Defaulted']
+    X = df_enc[feature_cols].copy()
+    y = df_enc['Defaulted'].copy()
+
+    # CRITICAL: Ensure no NaN or inf before training
+    X = X.fillna(X.median())
+    X = X.replace([np.inf, -np.inf], X.median())
+
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     gb = GradientBoostingClassifier(n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42)
     gb.fit(X_train, y_train)
@@ -124,7 +144,7 @@ df = load_data()
 # ============================================================
 # SIDEBAR FILTERS
 # ============================================================
-st.sidebar.title("🇳🇬 Filters")
+st.sidebar.title("Filters")
 
 risk_filter = st.sidebar.multiselect(
     "Risk grade",
@@ -187,8 +207,8 @@ total_loan_value = filtered['LoanAmount'].sum()
 total_expected_loss = filtered['ExpectedLoss'].sum()
 
 col1.metric("Total Applicants", f"{len(filtered):,}")
-col2.metric("Total Loan Value", f"₦{total_loan_value:,.0f}")
-col3.metric("Expected Loss", f"₦{total_expected_loss:,.0f}")
+col2.metric("Total Loan Value", f"N{total_loan_value:,.0f}")
+col3.metric("Expected Loss", f"N{total_expected_loss:,.0f}")
 col4.metric("Portfolio Default Risk", f"{filtered['DefaultProbability'].mean()*100:.1f}%")
 col5.metric("Avg Recommended Rate", f"{filtered['RecommendedRate'].mean():.1f}%")
 
@@ -257,7 +277,7 @@ with right2:
     loss_by_grade = filtered.groupby('RiskGrade')['ExpectedLoss'].sum() / 1e6
     colors_loss = ['#2ecc71', '#f39c12', '#e67e22', '#e74c3c', '#8e44ad']
     bars = ax.bar(loss_by_grade.index, loss_by_grade.values, color=colors_loss[:len(loss_by_grade)], edgecolor='white', linewidth=0.5)
-    ax.set_ylabel("Expected Loss (₦ Millions)")
+    ax.set_ylabel("Expected Loss (N Millions)")
     ax.tick_params(axis='x', rotation=15)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -293,7 +313,7 @@ st.download_button(
 st.divider()
 
 # ============================================================
-# DECISION RULES EXPLANATION
+# DECISION RULES
 # ============================================================
 st.subheader("Automated Decision Rules")
 
