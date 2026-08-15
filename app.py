@@ -107,7 +107,7 @@ def load_data():
 
     # CRITICAL: Ensure no NaN or inf before training
     X = X.fillna(X.median())
-    X = X.replace([np.inf, -np.inf], X.median())
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(X.median())
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
     gb = GradientBoostingClassifier(n_estimators=200, max_depth=4, learning_rate=0.1, random_state=42)
