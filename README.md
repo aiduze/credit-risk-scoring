@@ -1,6 +1,6 @@
 # Nigerian Digital Lending: Credit Risk Scoring
 
-&gt; **End-to-end credit risk model** for Nigerian fintech/loan app institutions using alternative data (mobile behavior, BVN verification, transaction patterns).
+**End-to-end credit risk model** for Nigerian fintech/loan app institutions using alternative data (mobile behavior, BVN verification, transaction patterns).
 
 ---
 
