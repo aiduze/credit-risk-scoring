@@ -3,9 +3,6 @@
 **End-to-end credit risk model** for Nigerian fintech/loan app institutions using alternative data (mobile behavior, BVN verification, transaction patterns).
 
 ----
-
-![Project Banner](https://raw.githubusercontent.com/aiduze/credit-risk-scoring/refs/heads/main/assets/markmap.svg)
-
 ## Problem Statement
 
 Nigerian digital lenders face **~22% default rates** and lack traditional credit bureau coverage for most borrowers. This project builds an **alternative-data credit risk model** that scores every loan applicant using:
